@@ -1,17 +1,21 @@
 /*
  * CAN bus driver for Microchip 251x/25625 CAN Controller with SPI Interface
  *
+ * 2021, modified by Max van Daalen (max.vandaalen@bitparallel.com) - Bit Parallel Ltd
+ * - Added support for hardware filtering in dual MCP251x setups, e.g. the dual CAN Waveshare module for the Raspberry Pi
+ * - Forked from https://github.com/craigpeacock/mcp251x (Craig Peacock)
+ *
  * MCP2510 support and bug fixes by Christian Pellegrin
  * <chripell@evolware.org>
  *
  * Copyright 2009 Christian Pellegrin EVOL S.r.l.
  *
  * Copyright 2007 Raymarine UK, Ltd. All Rights Reserved.
- * Written under contract by:
- *   Chris Elston, Katalix Systems, Ltd.
+ * Written under contract by
+ * - Chris Elston, Katalix Systems, Ltd.
  *
  * Based on Microchip MCP251x CAN controller driver written by
- * David Vrabel, Copyright 2006 Arcom Control Systems Ltd.
+ * - David Vrabel, Copyright 2006 Arcom Control Systems Ltd.
  *
  * Based on CAN bus driver for the CCAN controller written by
  * - Sascha Hauer, Marc Kleine-Budde, Pengutronix
@@ -29,7 +33,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
- *
  *
  *
  * Your platform definition file should specify something like:
@@ -57,7 +60,12 @@
 #include <linux/can/core.h>
 #include <linux/can/dev.h>
 #include <linux/can/led.h>
+
+// note, at the time of writing this file was missing from the kernel headers
+//       if needed, this is the required path /usr/src/linux-headers-5.10.63-v8+/include/linux/can/platform/mcp251x.h
+//
 #include <linux/can/platform/mcp251x.h>
+
 #include <linux/clk.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
@@ -88,7 +96,6 @@
 #define RTS_TXB1		0x02
 #define RTS_TXB2		0x04
 #define INSTRUCTION_RTS(n)	(0x80 | ((n) & 0x07))
-
 
 /* MPC251x registers */
 #define CANSTAT	      0x0e
@@ -195,6 +202,7 @@
 #define RXFSIDL(n) ((n) * 4 + 1 + RXFSID(n))
 #define RXFEID8(n) ((n) * 4 + 2 + RXFSID(n))
 #define RXFEID0(n) ((n) * 4 + 3 + RXFSID(n))
+
 const u8 RXFSIDH[6] = {
 		0x00,
 		0x04,
@@ -203,6 +211,7 @@ const u8 RXFSIDH[6] = {
 		0x14,
 		0x18
 	};
+
 const u8 RXFSIDL[6] = {
 		0x01,
 		0x05,
@@ -211,6 +220,7 @@ const u8 RXFSIDL[6] = {
 		0x15,
 		0x19
 	};
+
 const u8 RXFEID8[6] = {
 		0x02,
 		0x06,
@@ -219,6 +229,7 @@ const u8 RXFEID8[6] = {
 		0x16,
 		0x1A
 	};
+
 const u8 RXFEID0[6] = {
 		0x03,
 		0x07,
@@ -227,6 +238,7 @@ const u8 RXFEID0[6] = {
 		0x17,
 		0x1B
 	};
+
 #define RXMSIDH(n) ((n) * 4 + 0x20)
 #define RXMSIDL(n) ((n) * 4 + 0x21)
 #define RXMEID8(n) ((n) * 4 + 0x22)
@@ -251,33 +263,74 @@ const u8 RXFEID0[6] = {
 
 #define DEVICE_NAME "mcp251x"
 
-static int mcp251x_enable_dma; /* Enable SPI DMA. Default: 0 (Off) */
-module_param(mcp251x_enable_dma, int, 0444);
-MODULE_PARM_DESC(mcp251x_enable_dma, "Enable SPI DMA. Default: 0 (Off)");
+static int enable_dma = 0; /* Enable SPI DMA. Default: 0 (Off) */
+module_param(enable_dma, int, 0444);
+MODULE_PARM_DESC(enable_dma, " Configure SPI to use DMA\n"
+                             "                            0 = OFF (default value)\n"
+                             "                            1 = ON (can use any non zero value)");
+//
+// for the moment only allow a maximum of two CAN devices to be configured
+// intended to be used with the Waveshare dual CAN expansion board for the Raspberry Pi
+//
 
-static int rxbn_op_mode[2] = {0, 0};
-module_param_array(rxbn_op_mode, int, NULL, S_IRUGO);
-MODULE_PARM_DESC(rxbn_op_mode, "0 = (default) MCP2515 hardware filtering will"
-	" be disabled for receive buffer n (0 or 1)."
-	" rxb0 controls filters 0 and 1, rxb1 controls filters 2-5"
-	" Note there is kernel level filtering, but for high traffic scenarios"
-	" kernel may not be able to keep up."
-	" 1 = use rxbn_mask and rxbn filters, but only accept std CAN ids."
-	" 2 = use rxbn_mask and rxbn filters, but only accept ext CAN ids."
-	" 3 = use rxbn_mask and rxbn filters, and accept ext or std CAN ids.");
+static int number_of_device_parameter_sets = 0;
+static char *device[2];
+module_param_array(device, charp, &number_of_device_parameter_sets, S_IRUGO);
+MODULE_PARM_DESC(device, "     Specify a maximum of TWO device names for hardware filter configuration\n"
+                         "                            Notes, Filters will only be applied to matching devices\n"
+                         "                                   When specifing two devices, add both sets of mode, mask and filter parameters");
 
-static int rxbn_mask[2];
-module_param_array(rxbn_mask, int, NULL, S_IRUGO);
-MODULE_PARM_DESC(rxbn_mask, "Mask used for receive buffer n if rxbn_op_mode "
-	" is 1, 2 or 3. Bits 10-0 for std ids. Bits 29-11 for ext ids.");
+//
+// the hardware filter mode arrays
+//
 
-static int rxbn_filters[6];
-module_param_array(rxbn_filters, int, NULL, S_IRUGO);
-MODULE_PARM_DESC(rxbn_filters, "Filter used for receive buffer n if "
-	"rxbn_op_mode is 1, 2 or 3. Bits 10-0 for std ids. Bits 29-11 for ext "
-	"ids (also need to set bit 30 for ext id filtering). Note that filters "
-	"0 and 1 correspond to rxbn_op_mode[0] and rxbn_mask[0], while filters "
-	"2-5 corresponds to rxbn_op_mode[1] and rxbn_mask[1]");
+static int mode1[2] = {0, 0};
+module_param_array(mode1, int, NULL, S_IRUGO);
+MODULE_PARM_DESC(mode1, "      Configures device1 hardware packet filtering for the receive buffers rxb0 and rxb1\n"
+                        "                            Kernel level filtering can still be used as a secondary option, but may struggle to keep up in high traffic scenarios\n"
+                        "                            Notes, Filters 0 and 1 apply to rxb0\n"
+                        "                                   Filters 2, 3, 4 and 5 apply to rxb1\n"
+                        "                            0 = Disable all hardware filtering (default value)\n"
+                        "                            1 = Filter, but only accept std CAN IDs\n"
+                        "                            2 = Filter, but only accept ext CAN IDs\n"
+                        "                            3 = Filter and accept std or ext CAN IDs");
+
+static int mode2[2] = {0, 0};
+module_param_array(mode2, int, NULL, S_IRUGO);
+MODULE_PARM_DESC(mode2, "      Configures device2 hardware packet filtering for the receive buffers rxb0 and rxb1\n"
+                        "                            See above device1 details for the mode configuration options");
+
+//
+// the hardware mask arrays
+//
+
+static int mask1[2] = {0, 0};
+module_param_array(mask1, int, NULL, S_IRUGO);
+MODULE_PARM_DESC(mask1, "      Mask used for the device1 receive buffer n, only applies to modes 1, 2 or 3\n"
+                        "                            Use bits 10-0 for std IDs\n"
+                        "                            Use bits 29-11 for ext IDs");
+
+static int mask2[2] = {0, 0};
+module_param_array(mask2, int, NULL, S_IRUGO);
+MODULE_PARM_DESC(mask2, "      Mask used for the device2 receive buffer n, only applies to modes 1, 2 or 3\n"
+                        "                            See above device1 details for the mask configuration options");
+
+//
+// the hardware filters arrays
+//
+
+static int filt1[6] = {0, 0, 0, 0, 0, 0};
+module_param_array(filt1, int, NULL, S_IRUGO);
+MODULE_PARM_DESC(filt1, "      Filters used for the device1 receive buffers, only applies to modes 1, 2 or 3\n"
+                        "                            Use bits 10-0 for std IDs\n"
+                        "                            Use bits 29-11 for ext IDs (must set bit 30 for ext ID filtering)\n"
+                        "                            Notes, Filters 0 and 1 correspond to mode1[0] and mask1[0]\n"
+                        "                                   Filters 2, 3, 4 and 5 correspond to mode1[1] and mask1[1]");
+
+static int filt2[6] = {0, 0, 0, 0, 0, 0};
+module_param_array(filt2, int, NULL, S_IRUGO);
+MODULE_PARM_DESC(filt2, "      Filters used for the device2 receive buffers, only applies to modes 1, 2 or 3\n"
+                        "                            See above device1 details for the mask configuration options");
 
 static const struct can_bittiming_const mcp251x_bittiming_const = {
 	.name = DEVICE_NAME,
@@ -379,7 +432,7 @@ static int mcp251x_spi_trans(struct spi_device *spi, int len)
 
 	spi_message_init(&m);
 
-	if (mcp251x_enable_dma) {
+	if (enable_dma) {
 		t.tx_dma = priv->spi_tx_dma;
 		t.rx_dma = priv->spi_rx_dma;
 		m.is_dma_mapped = 1;
@@ -670,59 +723,153 @@ static int mcp251x_do_set_bittiming(struct net_device *net)
 
 static int mcp251x_setup(struct net_device *net, struct spi_device *spi)
 {
-	int i = 0;
-	uint8_t reg_val = 0;
+    int i = 0;
+    uint8_t reg_val = 0;
+    struct mcp251x_priv *priv = netdev_priv(net);
 
-	mcp251x_do_set_bittiming(net);
+    uint8_t can_filter = 0;
+    int rxbn_op_mode[2], rxbn_mask[2], rxbn_filters[6];
 
-	/* Setup recv buffer 0 control. default no hw filtering */
-	reg_val = RXBCTRL_BUKT | RXBCTRL_RXM1 | RXBCTRL_RXM0;
-	if (1 == rxbn_op_mode[0]) {
-		/* std ids only */
-		reg_val = RXBCTRL_BUKT | RXBCTRL_RXM0 ;
-	} else if (2 == rxbn_op_mode[0]) {
-		/* ext ids only */
-		reg_val = RXBCTRL_BUKT | RXBCTRL_RXM1;
-	} else if (3 == rxbn_op_mode[0]) {	
-		/* std or ext ids */
-		reg_val = RXBCTRL_BUKT;
-	}	
-	mcp251x_write_reg(spi, RXBCTRL(0), reg_val);
+    memcpy(rxbn_op_mode, mode1, 2 * sizeof(int));
+    memcpy(rxbn_mask, mask1, 2 * sizeof(int));
+    memcpy(rxbn_filters, filt1, 6 * sizeof(int));
 
-	/* Setup recv buffer 1 control. default no hw filtering */
-	reg_val = RXBCTRL_RXM1 | RXBCTRL_RXM0;
-	if (1 == rxbn_op_mode[1]) {
-		/* std ids only */
-		reg_val = RXBCTRL_RXM0 ;
-	} else if (2 == rxbn_op_mode[1]) {
-		/* ext ids only */
-		reg_val = RXBCTRL_RXM1;
-	} else if (3 == rxbn_op_mode[1]) {	
-		/* std or ext ids */
-		reg_val = 0;
-	}	
+    // figure out if the hardware filtering parameter configuration is valid and which set of masks and filters to use
+    //
+    switch (number_of_device_parameter_sets)
+    {
+        case 1:
+            if (strcmp(net->name, device[0]) == 0)
+            {
+                can_filter = 1;
+            }
+            else
+            {
+                netdev_info(net, "Only one set of MCP%x hardware filters has been configured for use with device: %s\n", priv->model, device[0]);
+                netdev_info(net, "This does not match the name of the device requesting configuration\n");
+            }
+
+            break;
+
+        case 2:
+            if (strcmp(net->name, device[0]) == 0)
+            {
+                can_filter = 1;
+            }
+            else if (strcmp(net->name, device[1]) == 0)
+            {
+                memcpy(rxbn_op_mode, mode2, 2 * sizeof(int));
+                memcpy(rxbn_mask, mask2, 2 * sizeof(int));
+                memcpy(rxbn_filters, filt2, 6 * sizeof(int));
+                can_filter = 1;
+            }
+            else
+            {
+                netdev_info(net, "Two sets of MCP%x hardware filters have been configured for use with devices: %s, %s\n", priv->model, device[0], device[1]);
+                netdev_info(net, "Neither of these match the name of the device requesting configuration");
+            }
+
+            break;
+    }
+
+    if (can_filter)
+    {
+        netdev_info(net, "Configuring hardware filtering for the associated MCP%x\n", priv->model);
+        netdev_info(net, "- Modes: %d, %d", rxbn_op_mode[0], rxbn_op_mode[1]);
+        netdev_info(net, "- Masks: %#04x, %#04x", rxbn_mask[0], rxbn_mask[1]);
+        netdev_info(net, "- Filters: [%#04x, %#04x], [%#04x, %#04x, %#04x, %#04x]", rxbn_filters[0], rxbn_filters[1], rxbn_filters[2], rxbn_filters[3], rxbn_filters[4], rxbn_filters[5]);
+    }
+    else
+    {
+        memset(rxbn_op_mode, 0, 2 * sizeof(int));
+        memset(rxbn_mask, 0, 2 * sizeof(int));
+        memset(rxbn_filters, 0, 6 * sizeof(int));
+        netdev_info(net, "No hardware filtering will be configured for the associated MCP%x\n", priv->model);
+    }
+
+    mcp251x_do_set_bittiming(net);
+
+    // setup control for recv buffer 0
+    // note, by default there is no hardware filtering
+    //
+    reg_val = RXBCTRL_BUKT | RXBCTRL_RXM1 | RXBCTRL_RXM0;
+    if (can_filter)
+    {
+       	if (1 == rxbn_op_mode[0])
+        {
+            // std IDs only
+            //
+           	reg_val = RXBCTRL_BUKT | RXBCTRL_RXM0;
+        }
+        else if (2 == rxbn_op_mode[0])
+        {
+            // ext IDs only
+            //
+           	reg_val = RXBCTRL_BUKT | RXBCTRL_RXM1;
+        }
+        else if (3 == rxbn_op_mode[0])
+        {	
+            // std or ext IDs
+            //
+        	reg_val = RXBCTRL_BUKT;
+        }
+    }
+
+    // apply the control for recv buffer 0
+    //
+    mcp251x_write_reg(spi, RXBCTRL(0), reg_val);
+
+    // setup control for recv buffer 1
+    // note, by default there is no hardware filtering
+    //
+    reg_val = RXBCTRL_RXM1 | RXBCTRL_RXM0;
+    if (can_filter)
+    {
+        if (1 == rxbn_op_mode[1])
+        {
+	        // std IDs only
+            //
+	        reg_val = RXBCTRL_RXM0;
+        }
+        else if (2 == rxbn_op_mode[1])
+        {
+            // ext IDs only
+            //
+    		reg_val = RXBCTRL_RXM1;
+        }
+        else if (3 == rxbn_op_mode[1])
+        {	
+            // std or ext IDs
+            //
+		    reg_val = 0;
+    	}
+    }
+
+	// apply the control for recv buffer 1
+    //
 	mcp251x_write_reg(spi, RXBCTRL(1), reg_val);
 
-	/* Fill out mask registers */
-	for (i = 0; i < ARRAY_SIZE(rxbn_mask); i++) {
-		mcp251x_write_reg(spi, RXMSIDH(i), (uint8_t)(rxbn_mask[i]>>3));
-		mcp251x_write_reg(spi, RXMSIDL(i), (uint8_t)((rxbn_mask[i]<<5) | 
-			(0x3 & (rxbn_mask[i]>>27))));
-		mcp251x_write_reg(spi, RXMEID8(i), (uint8_t)(rxbn_mask[i]>>19));
-		mcp251x_write_reg(spi, RXMEID0(i), (uint8_t)(rxbn_mask[i]>>11));
+	// fill out mask registers
+    // note, there will always be 2 masks, i.e. for rxb0 and rxb1 
+    //
+	for (i = 0; i < ARRAY_SIZE(rxbn_mask); i++)
+    {
+		mcp251x_write_reg(spi, RXMSIDH(i), (uint8_t)(rxbn_mask[i] >> 3));
+		mcp251x_write_reg(spi, RXMSIDL(i), (uint8_t)((rxbn_mask[i] << 5) | (0x03 & (rxbn_mask[i] >> 27))));
+		mcp251x_write_reg(spi, RXMEID8(i), (uint8_t)(rxbn_mask[i] >> 19));
+		mcp251x_write_reg(spi, RXMEID0(i), (uint8_t)(rxbn_mask[i] >> 11));
 	}
 
-	/* Fill out filter registers */
-	for (i = 0; i < ARRAY_SIZE(rxbn_filters); i++) {
-		mcp251x_write_reg(spi, RXFSIDH[i], (uint8_t)(
-			rxbn_filters[i]>>3));
-		mcp251x_write_reg(spi, RXFSIDL[i], (uint8_t)(
-			(rxbn_filters[i]<<5) | (0x3 & (rxbn_filters[i]>>27)) | 
-			(0x8 & (rxbn_filters[i]>>29))));
-		mcp251x_write_reg(spi, RXFEID8[i], (uint8_t)(
-			rxbn_filters[i]>>19));
-		mcp251x_write_reg(spi, RXFEID0[i], (uint8_t)(
-			rxbn_filters[i]>>11));
+	// fill out filter registers
+    // note, there will be at least 6 filters, i.e. 2 for rxb0 and 4 for rxb1
+    //       any that are not specified will use the default assigned value
+    //
+	for (i = 0; i < ARRAY_SIZE(rxbn_filters); i++)
+    {
+		mcp251x_write_reg(spi, RXFSIDH[i], (uint8_t)(rxbn_filters[i] >> 3));
+		mcp251x_write_reg(spi, RXFSIDL[i], (uint8_t)((rxbn_filters[i] << 5) | (0x03 & (rxbn_filters[i] >> 27)) | (0x08 & (rxbn_filters[i] >> 29))));
+		mcp251x_write_reg(spi, RXFEID8[i], (uint8_t)(rxbn_filters[i] >> 19));
+		mcp251x_write_reg(spi, RXFEID0[i], (uint8_t)(rxbn_filters[i] >> 11));
 	}
 
 	return 0;
@@ -977,7 +1124,10 @@ static irqreturn_t mcp251x_can_ist(int irq, void *dev_id)
 			if (new_state >= CAN_STATE_ERROR_WARNING &&
 			    new_state <= CAN_STATE_BUS_OFF)
 				priv->can.can_stats.error_warning++;
-		case CAN_STATE_ERROR_WARNING:	/* fallthrough */
+
+        /* Don't warn about the intended fallthrough */
+        __attribute__((__fallthrough__));
+		case CAN_STATE_ERROR_WARNING:
 			if (new_state >= CAN_STATE_ERROR_PASSIVE &&
 			    new_state <= CAN_STATE_BUS_OFF)
 				priv->can.can_stats.error_passive++;
@@ -1221,7 +1371,7 @@ static int mcp251x_can_probe(struct spi_device *spi)
 	mutex_init(&priv->mcp_lock);
 
 	/* If requested, allocate DMA buffers */
-	if (mcp251x_enable_dma) {
+	if (enable_dma) {
 		spi->dev.coherent_dma_mask = ~0;
 
 		/*
@@ -1239,12 +1389,12 @@ static int mcp251x_can_probe(struct spi_device *spi)
 							(PAGE_SIZE / 2));
 		} else {
 			/* Fall back to non-DMA */
-			mcp251x_enable_dma = 0;
+			enable_dma = 0;
 		}
 	}
 
 	/* Allocate non-DMA buffers */
-	if (!mcp251x_enable_dma) {
+	if (!enable_dma) {
 		priv->spi_tx_buf = devm_kzalloc(&spi->dev, SPI_TRANSFER_BUF_LEN,
 						GFP_KERNEL);
 		if (!priv->spi_tx_buf) {
@@ -1277,7 +1427,7 @@ static int mcp251x_can_probe(struct spi_device *spi)
 
 	devm_can_led_init(net);
 
-	netdev_info(net, "MCP%x successfully initialized.\n", priv->model);
+	netdev_info(net, "MCP%x successfully initialized\n", priv->model);
 	return 0;
 
 error_probe:
