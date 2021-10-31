@@ -799,19 +799,19 @@ static int mcp251x_setup(struct net_device *net, struct spi_device *spi)
         {
             // std IDs only
             //
-           	reg_val = RXBCTRL_BUKT | RXBCTRL_RXM0;
+            reg_val = RXBCTRL_BUKT | RXBCTRL_RXM0;
         }
         else if (2 == rxbn_op_mode[0])
         {
             // ext IDs only
             //
-           	reg_val = RXBCTRL_BUKT | RXBCTRL_RXM1;
+            reg_val = RXBCTRL_BUKT | RXBCTRL_RXM1;
         }
         else if (3 == rxbn_op_mode[0])
         {	
             // std or ext IDs
             //
-        	reg_val = RXBCTRL_BUKT;
+            reg_val = RXBCTRL_BUKT;
         }
     }
 
@@ -827,52 +827,52 @@ static int mcp251x_setup(struct net_device *net, struct spi_device *spi)
     {
         if (1 == rxbn_op_mode[1])
         {
-	        // std IDs only
+            // std IDs only
             //
-	        reg_val = RXBCTRL_RXM0;
+            reg_val = RXBCTRL_RXM0;
         }
         else if (2 == rxbn_op_mode[1])
         {
             // ext IDs only
             //
-    		reg_val = RXBCTRL_RXM1;
+            reg_val = RXBCTRL_RXM1;
         }
         else if (3 == rxbn_op_mode[1])
         {	
             // std or ext IDs
             //
-		    reg_val = 0;
+            reg_val = 0;
     	}
     }
 
-	// apply the control for recv buffer 1
+    // apply the control for recv buffer 1
     //
-	mcp251x_write_reg(spi, RXBCTRL(1), reg_val);
+    mcp251x_write_reg(spi, RXBCTRL(1), reg_val);
 
-	// fill out mask registers
+    // fill out mask registers
     // note, there will always be 2 masks, i.e. for rxb0 and rxb1 
     //
-	for (i = 0; i < ARRAY_SIZE(rxbn_mask); i++)
+    for (i = 0; i < ARRAY_SIZE(rxbn_mask); i++)
     {
-		mcp251x_write_reg(spi, RXMSIDH(i), (uint8_t)(rxbn_mask[i] >> 3));
-		mcp251x_write_reg(spi, RXMSIDL(i), (uint8_t)((rxbn_mask[i] << 5) | (0x03 & (rxbn_mask[i] >> 27))));
-		mcp251x_write_reg(spi, RXMEID8(i), (uint8_t)(rxbn_mask[i] >> 19));
-		mcp251x_write_reg(spi, RXMEID0(i), (uint8_t)(rxbn_mask[i] >> 11));
-	}
+        mcp251x_write_reg(spi, RXMSIDH(i), (uint8_t)(rxbn_mask[i] >> 3));
+        mcp251x_write_reg(spi, RXMSIDL(i), (uint8_t)((rxbn_mask[i] << 5) | (0x03 & (rxbn_mask[i] >> 27))));
+        mcp251x_write_reg(spi, RXMEID8(i), (uint8_t)(rxbn_mask[i] >> 19));
+        mcp251x_write_reg(spi, RXMEID0(i), (uint8_t)(rxbn_mask[i] >> 11));
+    }
 
-	// fill out filter registers
+    // fill out filter registers
     // note, there will be at least 6 filters, i.e. 2 for rxb0 and 4 for rxb1
     //       any that are not specified will use the default assigned value
     //
-	for (i = 0; i < ARRAY_SIZE(rxbn_filters); i++)
+    for (i = 0; i < ARRAY_SIZE(rxbn_filters); i++)
     {
-		mcp251x_write_reg(spi, RXFSIDH[i], (uint8_t)(rxbn_filters[i] >> 3));
-		mcp251x_write_reg(spi, RXFSIDL[i], (uint8_t)((rxbn_filters[i] << 5) | (0x03 & (rxbn_filters[i] >> 27)) | (0x08 & (rxbn_filters[i] >> 29))));
-		mcp251x_write_reg(spi, RXFEID8[i], (uint8_t)(rxbn_filters[i] >> 19));
-		mcp251x_write_reg(spi, RXFEID0[i], (uint8_t)(rxbn_filters[i] >> 11));
-	}
+        mcp251x_write_reg(spi, RXFSIDH[i], (uint8_t)(rxbn_filters[i] >> 3));
+        mcp251x_write_reg(spi, RXFSIDL[i], (uint8_t)((rxbn_filters[i] << 5) | (0x03 & (rxbn_filters[i] >> 27)) | (0x08 & (rxbn_filters[i] >> 29))));
+        mcp251x_write_reg(spi, RXFEID8[i], (uint8_t)(rxbn_filters[i] >> 19));
+        mcp251x_write_reg(spi, RXFEID0[i], (uint8_t)(rxbn_filters[i] >> 11));
+    }
 
-	return 0;
+    return 0;
 }
 
 static int mcp251x_hw_reset(struct spi_device *spi)
