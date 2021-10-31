@@ -44,14 +44,14 @@ $ dmesg | grep -i mcp251x
 ```
 Parameters to specify the CAN filtering mode, masks and filters can be sent to the kernel using insmod  
 This driver supports up to two MCP251x devices  
-To configure a single device use:
+To configure a single device: (use `sudo`)
 ```
-$ sudo insmod mcp251x.ko device=can0 mode1=1,1 mask1=0xfff,0xfff filt1=0x100,0x101,0x102,0x103,0x104,0x105
+$ insmod mcp251x.ko device=can0 mode1=1,1 mask1=0xfff,0xfff filt1=0x100,0x101,0x102,0x103,0x104,0x105
 ```
-To configure two devices use (split to ease readability):
+To configure two devices (use `sudo`, split to ease readability):
 ```
-$ sudo insmod mcp251x.ko device=can0,can1 mode1=1,1 mask1=0xfff,0xfff filt1=0x100,0x101,0x102,0x103,0x105,0x105
-                                          mode2=1,1 mask2=0xfff,0xfff filt2=0x400,0x401,0x402
+$ insmod mcp251x.ko device=can0,can1 mode1=1,1 mask1=0xfff,0xfff filt1=0x100,0x101,0x102,0x103,0x105,0x106
+                                     mode2=1,1 mask2=0xfff,0xfff filt2=0x400,0x401,0x402
 ```
 Notes:
 * Each device supports two masks, one for each of its receive buffers
