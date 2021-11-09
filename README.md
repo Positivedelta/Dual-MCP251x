@@ -1,6 +1,6 @@
 # Dual-MCP251x Driver
 Linux CAN driver with hardware filtering, configurable for up to two Microchip MCP251x devices  
-e.g. for use with the Waveshare Dual CAN expansion board for the Raspberry PI
+e.g. for use with the Waveshare Dual CAN expansion board for the Raspberry Pi
 
 Based on patch from:
 https://support.criticallink.com/redmine/attachments/download/14913/0001-can-mcp251x-Add-ability-to-use-CAN-ID-hw-filter.patch
@@ -10,7 +10,7 @@ First download the kernel headers:
 ```
 $ sudo apt-get install raspberrypi-kernel-headers
 ```
-Now download this repo
+Now download this repository
 ```
 $ git clone https://github.com/Positivedelta/Dual-MCP251x.git
 ```
@@ -31,7 +31,15 @@ make[1]: Leaving directory '/usr/src/linux-headers-5.10.63-v8+'
 ```
 
 # Testing
-To test the driver, remove the old one (if loaded) and insert your new module into the kernel using:
+First the configure and associate the SPI driver with the CAN hardware. On the Raspberry Pi this is
+done by adding the following configuration to `/boot/config.txt`
+```
+dtparam=spi=on
+dtoverlay=mcp2515-can1,oscillator=16000000,interrupt=25
+dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=23
+```
+Next, reboot the Raspberry Pi in order for the changes to take effect  
+Finally to test the driver, remove the old one (if loaded) and insert your new module into the kernel using:
 ```
 $ sudo rmmod mcp251x
 $ sudo insmod mcp251x.ko
@@ -73,7 +81,16 @@ Any configured hardware filters will be reported in the Kernel log and can be vi
 [ 4685.423416] mcp251x spi0.1 can0: - Filters: [0x100, 0x101], [0x102, 0x103, 0x104, 0x104]
 ```
 
-Modinfo can be used to describe the parameters:
+Enabled CAN devices can now be seen in the network configuration, to display this use:
+```
+$ ifconfig
+```
+Note, the default transmit buffer size is relatively small, if necessary this can be updated using:
+```
+$ sudo ifconfig can0 txqueuelen 65536
+```
+
+Modinfo can be used to describe the hardware filtering configuration parameters:
 ```
 $ modinfo mcp251x.ko
 filename:       /home/pi/development/Dual_MCP251x/mcp251x.ko
