@@ -1161,7 +1161,7 @@ static irqreturn_t mcp251x_can_ist(int irq, void *dev_id)
 		// added by Max van Daalen
 		//
 		if (priv->can.state != CAN_STATE_BUS_OFF)
-        {
+		{
 			// FIXME! should this be handled by the socketcan layer? doesn't appear to be, so added here
 			//
 			if ((priv->can.state != CAN_STATE_ERROR_ACTIVE) && (new_state == CAN_STATE_ERROR_ACTIVE))
