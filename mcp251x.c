@@ -988,6 +988,28 @@ static void mcp251x_error_skb(struct net_device *net, int can_id, int data1)
 	}
 }
 
+// added by Max van Daalen
+//
+// FIXME! should this be handled by the socketcan layer? see comment in mcp251x_can_ist()
+//
+static void mcp251x_prot_error_skb(struct net_device *net, int can_id, int data2)
+{
+	struct sk_buff *skb;
+	struct can_frame *frame;
+
+	skb = alloc_can_err_skb(net, &frame);
+	if (skb)
+	{
+		frame->can_id |= can_id;
+		frame->data[2] = data2;
+		netif_rx_ni(skb);
+	}
+	else
+	{
+		netdev_err(net, "cannot allocate protocol error skb\n");
+	}
+}
+
 static void mcp251x_tx_work_handler(struct work_struct *ws)
 {
 	struct mcp251x_priv *priv = container_of(ws, struct mcp251x_priv,
@@ -1125,8 +1147,8 @@ static irqreturn_t mcp251x_can_ist(int irq, void *dev_id)
 			    new_state <= CAN_STATE_BUS_OFF)
 				priv->can.can_stats.error_warning++;
 
-        /* Don't warn about the intended fallthrough */
-        __attribute__((__fallthrough__));
+		/* Don't warn about the intended fallthrough */
+		__attribute__((__fallthrough__));
 		case CAN_STATE_ERROR_WARNING:
 			if (new_state >= CAN_STATE_ERROR_PASSIVE &&
 			    new_state <= CAN_STATE_BUS_OFF)
@@ -1135,6 +1157,32 @@ static irqreturn_t mcp251x_can_ist(int irq, void *dev_id)
 		default:
 			break;
 		}
+
+		// added by Max van Daalen
+		//
+		if (priv->can.state != CAN_STATE_BUS_OFF)
+        {
+			// FIXME! should this be handled by the socketcan layer? doesn't appear to be, so added here
+			//
+			if ((priv->can.state != CAN_STATE_ERROR_ACTIVE) && (new_state == CAN_STATE_ERROR_ACTIVE))
+			{
+				mcp251x_prot_error_skb(net, CAN_ERR_PROT, CAN_ERR_PROT_ACTIVE);
+			}
+		}
+		else
+		{
+			// FIXME! this is not the correct place for this check, should this happen in restart handler?
+			//        for whatever reason this didn't work, perhaps the spi was not active, investigate...
+			//        the mcp251x_restart_work_handler() does contain al call to mcp251x_error_skb(), but does it work?
+			//
+			if (new_state != CAN_STATE_BUS_OFF)
+			{
+				mcp251x_error_skb(net, CAN_ERR_RESTARTED, 0);
+			}
+		}
+
+		// can finally update the state
+		//
 		priv->can.state = new_state;
 
 		if (intf & CANINTF_ERRIF) {
