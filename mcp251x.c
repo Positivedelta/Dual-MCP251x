@@ -2,8 +2,13 @@
  * CAN bus driver for Microchip 251x/25625 CAN Controller with SPI Interface
  *
  * 2021, modified by Max van Daalen (max.vandaalen@bitparallel.com) - Bit Parallel Ltd
- * - Added support for hardware filtering in dual MCP251x setups, e.g. the dual CAN Waveshare module for the Raspberry Pi
  * - Forked from https://github.com/craigpeacock/mcp251x (Craig Peacock)
+ * - Added support for hardware filtering in dual MCP251x setups, e.g. the dual CAN Waveshare module for the Raspberry Pi
+ * - Modified the mcp251x_can_ist() interrupt handler to provide
+ *   - A socketCAN error frame for CAN_ERR_PROT that returns CAN_ERR_PROT_ACTIVE in data2, required the addition of mcp251x_prot_error_skb()
+ *     Note, puzzled by this, expected it to be handled by the socketcan layer, will investigate further
+ *   - A socketCAN error ID for CAN_ERR_RESTARTED
+ *     Note, the mcp251x_restart_work_handler() does contain a call to mcp251x_error_skb(), but does it work? Will investigate further
  *
  * MCP2510 support and bug fixes by Christian Pellegrin
  * <chripell@evolware.org>
@@ -1173,7 +1178,7 @@ static irqreturn_t mcp251x_can_ist(int irq, void *dev_id)
 		{
 			// FIXME! this is not the correct place for this check, should this happen in restart handler?
 			//        for whatever reason this didn't work, perhaps the spi was not active, investigate...
-			//        the mcp251x_restart_work_handler() does contain al call to mcp251x_error_skb(), but does it work?
+			//        the mcp251x_restart_work_handler() does contain a call to mcp251x_error_skb(), but does it work?
 			//
 			if (new_state != CAN_STATE_BUS_OFF)
 			{
